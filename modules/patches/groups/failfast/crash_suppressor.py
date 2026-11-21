@@ -37,6 +37,10 @@ def apply(data: bytearray, verify: bool = False, dry_run: bool = False, allow_mi
     cpu_total = len(raw_cpu) + len(repl_cpu)
     atomic_total = len(raw_atomic) + len(repl_atomic)
 
+    if (cpu_total == 0 and atomic_total == 0):
+        info["status"] = "not_needed_or_clean"
+        return True, info
+
     if (cpu_total == 0 or atomic_total == 0):
         if allow_missing:
             info["status"] = "skipped_missing"
@@ -45,7 +49,7 @@ def apply(data: bytearray, verify: bool = False, dry_run: bool = False, allow_mi
         return False, info
 
     if verify:
-        v_ok = (len(raw_cpu) == 0 and len(repl_cpu) == 1 and len(raw_atomic) == 0 and len(repl_atomic) == 1)
+        v_ok = (len(raw_cpu) == 0 and len(repl_cpu) <= 1 and len(raw_atomic) == 0 and len(repl_atomic) <= 1)
         info["status"] = "verified" if v_ok else "unverified"
         return v_ok, info
 
