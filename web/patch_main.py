@@ -3,7 +3,8 @@
 web/patch_main.py - Dynamic patcher for web/main.js.
 
 Locates the Appearance settings block and injects the Desktop Mode toggle
-if not already present. Safe, idempotent, and resilient to upstream changes.
+and native Android system theme detection if not already present.
+Safe, idempotent, and resilient across upstream versions (v2.4.0 through v2.34.0).
 """
 
 import sys
@@ -22,32 +23,39 @@ def patch_main(file_path):
         print("[web-patch] Desktop Mode toggle already present in main.js")
         return True
 
-    # 1. State hook injection pattern in Appearance component:
-    # Matches: var C=g!==3,D=g!==2,E=F=>G=>{F===t&&v(G)}; or legacy var B=f!==3,C=f!==2,D=E=>G=>{E===r&&u(G)};
-    hook_pattern = re.compile(r'(var\s+[A-Za-z0-9_$]+=[A-Za-z0-9_$]+!==3,\s*[A-Za-z0-9_$]+=[A-Za-z0-9_$]+!==2,\s*[A-Za-z0-9_$]+=[A-Za-z0-9_$]+=>\s*[A-Za-z0-9_$]+=>\{.*?\};)')
-    hook_match = hook_pattern.search(content)
-
-    # 2. JSX Theme element injection: find Theme element in Appearance
+    # 1. Locate Theme element in Appearance
     theme_idx = content.find('{label:"Theme"')
-    theme_match = None
-    react_id = "A"
-    if theme_idx != -1:
-        # Search backwards within a reasonable window (e.g. 100 chars) for createElement
-        window_start = max(0, theme_idx - 100)
-        window_end = min(len(content), theme_idx + 500)
-        window_text = content[window_start:window_end]
-        theme_pattern = re.compile(
-            r'([A-Za-z0-9_$]+)\.createElement\(([A-Za-z0-9_$]+),\{label:"Theme",.*?onSelect:[A-Za-z0-9_$]+\}\)'
-        )
-        theme_match = theme_pattern.search(window_text)
-        if theme_match:
-            react_id = theme_match.group(1)
+    if theme_idx == -1:
+        print("[web-patch] {label:\"Theme\"} not found in main.js", file=sys.stderr)
+        return False
+
+    window_start = max(0, theme_idx - 1200)
+    window_end = min(len(content), theme_idx + 1200)
+    window_text = content[window_start:window_end]
+
+    # 2. State hook injection pattern in Appearance component:
+    # Matches:
+    #   - 2.4/2.11: var C=g!==3,D=g!==2,E=F=>G=>{F===t&&v(G)};
+    #   - 2.34.0:   B=b!==3;var D=b!==2;
+    hook_pattern = re.compile(
+        r'(var\s+[A-Za-z0-9_$]+=[A-Za-z0-9_$]+!==3,\s*[A-Za-z0-9_$]+=[A-Za-z0-9_$]+!==2,\s*[A-Za-z0-9_$]+=[A-Za-z0-9_$]+=>\s*[A-Za-z0-9_$]+=>\{.*?\};)|'
+        r'([A-Za-z0-9_$]+=[A-Za-z0-9_$]+!==3;\s*var\s+[A-Za-z0-9_$]+=[A-Za-z0-9_$]+!==2;)'
+    )
+    hook_match = hook_pattern.search(window_text)
+
+    # 3. JSX Theme element pattern:
+    theme_pattern = re.compile(
+        r'([A-Za-z0-9_$]+)\.createElement\(([A-Za-z0-9_$]+),\{label:"Theme",.*?onSelect:[A-Za-z0-9_$]+\}\)'
+    )
+    theme_match = theme_pattern.search(window_text)
 
     if not hook_match or not theme_match:
         print(f"[web-patch] patterns not matched: hook={bool(hook_match)}, theme={bool(theme_match)}", file=sys.stderr)
         return False
 
-    orig_hook = hook_match.group(1)
+    react_id = theme_match.group(1)
+    orig_hook = hook_match.group(0)
+
     injected_hook = (
         f"var [isDesktop,setIsDesktop]=(0,{react_id}.useState)(()=>{{"
         "try{if(window.Android&&typeof window.Android.isDesktopMode==='function')return window.Android.isDesktopMode();"
@@ -58,19 +66,16 @@ def patch_main(file_path):
         + orig_hook
     )
 
-    # Detect switch and setting item components
-    # Look for setting item component used with rightElement or contrast setting
-    item_comp = "v3"
-    switch_comp = "dX"
-    re_idx = content.find('rightElement:')
-    if re_idx != -1:
-        re_window = content[max(0, re_idx - 150):min(len(content), re_idx + 150)]
-        item_m = re.search(r'([A-Za-z0-9_$]+)\.createElement\(([A-Za-z0-9_$]+),\{label:[^,]+,description:[^,]+,rightElement:', re_window)
-        if item_m:
-            item_comp = item_m.group(2)
-        sw_m = re.search(r'rightElement:[A-Za-z0-9_$]+\.createElement\(([A-Za-z0-9_$]+),\{checked:', re_window)
-        if sw_m:
-            switch_comp = sw_m.group(1)
+    # 4. Detect switch and setting item components
+    item_comp = "OU" if "var OU=" in content else "v3"
+    switch_comp = "RU" if "RU" in content else "dX"
+
+    sw_m = re.search(r'rightElement:\s*[A-Za-z0-9_$]+\.createElement\(([A-Za-z0-9_$]+),\{checked:', content)
+    if sw_m:
+        switch_comp = sw_m.group(1)
+    row_m = re.search(r'var\s+([A-Za-z0-9_$]+)=\(\{label:[A-Za-z0-9_$]+,description:[A-Za-z0-9_$]+,rightElement:', content)
+    if row_m:
+        item_comp = row_m.group(1)
 
     orig_theme = theme_match.group(0)
     injected_theme = (
@@ -78,6 +83,23 @@ def patch_main(file_path):
         + f',{react_id}.createElement({item_comp},{{label:"Desktop Mode",description:"Use desktop viewport and user agent for the workspace",'
         + f'rightElement:{react_id}.createElement({switch_comp},{{checked:isDesktop,onCheckedChange:onDesktopToggle}})}})'
     )
+
+    # 5. Native Android Theme Detection Hook (replaces standalone prefers-color-scheme check)
+    z0_pattern = re.compile(
+        r'function\s+([A-Za-z0-9_$]+)\(\)\{return\s+typeof\s+window!==\"undefined\"&&window\.matchMedia\?window\.matchMedia\(\"\(prefers-color-scheme:\s*dark\)\"\)\.matches:!1\}'
+    )
+    z0_match = z0_pattern.search(content)
+    if z0_match:
+        z0_fn = z0_match.group(1)
+        orig_z0 = z0_match.group(0)
+        injected_z0 = (
+            f"function {z0_fn}(){{try{{if(typeof window!==\"undefined\"&&window.Android&&typeof window.Android.getTheme===\"function\"){{"
+            f"var _t=window.Android.getTheme();if(_t===\"dark\")return!0;if(_t===\"light\")return!1}}"
+            f"if(typeof window!==\"undefined\"&&window.__AG_RESOLVED_THEME__){{"
+            f"if(window.__AG_RESOLVED_THEME__===\"dark\")return!0;if(window.__AG_RESOLVED_THEME__===\"light\")return!1}}}}catch(_e){{}}"
+            f"return typeof window!==\"undefined\"&&window.matchMedia?window.matchMedia(\"(prefers-color-scheme: dark)\").matches:!1}}"
+        )
+        content = content.replace(orig_z0, injected_z0, 1)
 
     content = content.replace(orig_hook, injected_hook, 1)
     content = content.replace(orig_theme, injected_theme, 1)
