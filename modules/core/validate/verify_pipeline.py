@@ -30,7 +30,7 @@ import manifest_verifier
 
 def run_pipeline():
     print("=" * 60)
-    print("  ANTIGRAVITY NEW CORE VERIFICATION PIPELINE (v2.34.0)")
+    print("  ANTIGRAVITY NEW CORE VERIFICATION PIPELINE (v2.35.2)")
     print("=" * 60)
 
     # 1. Check specs
